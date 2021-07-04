@@ -1,0 +1,136 @@
+---
+title: "Machine Learning 1"
+author: "Lindley Slipetz"
+date: "7/4/2021"
+output: pdf_document
+---
+
+For this homework I will be using my own dataset (psychology-related because I'm a quantitative psychology PhD student). We will be predicting suicides per 1000 from handguns per 1000, percentage of males in the population, percentage white in the population, and unemployment percentage in the population of Pennsylvania counties in 2018 (the data is actually longitudinal; but, for the sake of this assignment, I'll stick to one time point). 
+
+Let's load our packages!
+
+```{r packages, warning = FALSE, message = FALSE}
+#install.packages("tidyverse")
+library(tidyverse)
+#install.packages("tidymodels")
+library(tidymodels)
+library(caret)
+#install.packages("RANN")
+library(RANN)
+```
+
+Now, let's load the data!
+
+```{r data}
+sui_full_data <- read.csv("C:\\Users\\Owner\\Documents\\ICPSR\\ML\\HW 1\\ML_HW1.csv", header = TRUE)
+```
+
+Let's subset our data to the relevant columns and year.
+
+```{r subset}
+sui_data <- sui_full_data %>%
+   filter(year == 2018) %>%
+  select(suicides_per1000, handguns_per1000, male_pct, white_pct, unemployment_pct) 
+ 
+```
+
+Here, I standardize the predictors.
+
+```{r standard}
+sui_stand <- as.data.frame(scale(sui_data))
+```
+
+
+# 2 Creating training and testing sets.
+
+```{r split, warning = FALSE}
+set.seed(2874187)
+trainIndex <- createDataPartition(sui_stand$suicides_per1000, p=0.7, list = FALSE)
+train <- sui_stand[trainIndex,]
+test <- sui_stand[-trainIndex,]
+```
+
+# OLS with training data
+
+```{r train_lm, warning = FALSE}
+set.seed(164891264)
+train_sui = lm(suicides_per1000 ~ ., data=train)
+summary(train_sui)
+
+```
+The $R^{2}$ for the training model is 0.275, meaning 27.5% of the variance in the suicide variable is predicted by the other variables. The white percentage and unemployment percentage coefficient are positive and significant, meaning that as percent of white and unemployment increase, chance of suicide increases.
+
+# Comparing $R^2$
+
+```{r test}
+predictions <- train_sui %>% predict(test)
+R2(predictions, test$suicides_per1000)
+```
+
+The $R^2$ of the testing data is 0.015, meaning 1.5% of the variance is explained by the predictors. This is much less the $R^2$ of the training model. Perhaps this means the training model was overfit to the training data and, hence, was not flexible enough to fit the testing data.
+
+# 5 Create missing data
+
+Since my data has way fewer observations, I thought I would take the same proportion of missing data from my data. That left me with 4 missing values, which I thought would be too few. So, I increased it to 10.
+
+```{r missing}
+sui.missing <- sui_stand
+set.seed(4725)
+missing.index <- sample(1:67, 10)
+true.sui <- sui.missing$suicides_per1000[missing.index]
+sui.missing$suicides_per1000[missing.index] <- NA
+```
+
+# 6 k-nearest neighbors imputation
+
+```{r impute}
+set.seed(345)
+imputeValues <- preProcess(sui.missing, method="knnImpute", k=3)
+imputed.df <- predict(imputeValues, sui.missing)
+```
+
+```{r plot}
+plot(true.sui, imputed.df$suicides_per1000[missing.index])
+cor(true.sui, imputed.df$suicides_per1000[missing.index])
+```
+
+The correlation between the true values and the imputed values is 0.616, which isn't very good. Let's try again with an optimal k.
+
+```{r k_opt}
+knnGrid <- expand.grid(k=seq(1,40,by=2))
+nFolds <- 5  ## The number of folds * number of repeats
+nTune <- nrow(knnGrid)  ## The number of tuning configurations tested
+fitCtrl <- trainControl(method = "cv",
+                        number = nFolds,
+                        ## Search "grid" or "random"
+                        search = "random")
+#
+knn.res <- train(suicides_per1000 ~ .,
+                 data=na.omit(sui.missing),
+                 method="knn",
+                 trControl=fitCtrl,
+                 tuneGrid=knnGrid,
+                 #tuneLength=10,
+                 metric="RMSE")
+#
+knn.res
+#
+plot(knn.res)
+#
+#
+```
+
+From that, we got k=21. Let's try the correlations again with that.
+
+```{r impute_21}
+set.seed(47)
+imputeValues <- preProcess(sui.missing, method="knnImpute", k=21)
+imputed.df <- predict(imputeValues, sui.missing)
+```
+
+```{r plot_21}
+plot(true.sui, imputed.df$suicides_per1000[missing.index])
+cor(true.sui, imputed.df$suicides_per1000[missing.index])
+```
+
+Hmm...we got an even worse fit with a correlation of 0.245. Maybe k-nearest neighbors is not an appropriate imputation method for this data.
